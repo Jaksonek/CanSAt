@@ -1,0 +1,160 @@
+#include <cmath>
+#include <Wire.h>
+#include <Servo.h>
+#include <Adafruit_BMP280.h>
+#include <CanSatKit.h>
+#include <SPI.h>
+#include <SD.h>
+
+using namespace CanSatKit;
+
+Radio radio(Pins::Radio::ChipSelect,
+            Pins::Radio::DIO0,
+            433.0,
+            Bandwidth_125000_Hz,
+            SpreadingFactor_9,
+            CodingRate_4_8);
+Frame frame;
+int counter = 0;
+
+// BMP
+#define BMP_SCK 3  // scl
+#define BMP_MOSI 4 // sda
+Adafruit_BMP280 bmp;
+
+// Selector wheel
+#define pompka 8 // pompka
+Servo myservo;
+
+// SD card
+const int cs = 11;
+File myFile;
+
+// Variables
+float max_altitude;
+double pressure;
+float altitude;
+float altitude_sample_start;
+double temperatureOut;
+unsigned long time;
+unsigned long lastTime = 0;
+unsigned long time_pompka_start;
+
+int servoposition = 0;
+int interval = 950; // time between sending data
+int high[5] = {1300, 1100, 900, 700, 500}; // altitudes to take sample
+int samples = 0;
+int Mhigh = 1e9 + 7;
+bool fall_true = 0;
+bool pompka_ON = 0;
+
+float seaLevel = 1016;
+
+/*
+------------------Setup----------------------
+*/
+void setup() {
+  Serial.begin(9600);
+
+  if (!bmp.begin(0x76)) {
+    while (1);
+  }
+
+  if (!SD.begin(cs)) {
+    while (1);
+  }
+
+  radio.begin();
+  pinMode(pompka, OUTPUT);
+  myservo.attach(9);
+  delay(1000);
+}
+
+/*
+------------------loop----------------------
+*/
+void loop() {
+  if (fall_true == 0) {
+    if (fall() == true) {
+      fall_true = 1;
+    }
+  }
+
+  time = millis();
+  // read sensor data
+  temperatureOut = bmp.readTemperature();
+  pressure = bmp.readPressure();
+  altitude = bmp.readAltitude(seaLevel);
+
+  // send data
+  if (time - interval > lastTime) {
+    frame.print(counter);
+    counter++;
+    frame.print("Nebula temperature: ");
+    frame.print(temperatureOut, 2);
+    frame.print("C");
+    frame.print(" pressure: ");
+    frame.print(pressure, 2);
+    frame.print("hP");
+    frame.print("high");
+    frame.println(altitude);
+
+    radio.transmit(frame);
+    myFile = SD.open("dane.txt", FILE_WRITE);
+    myFile.print(frame);
+    myFile.close();
+
+    lastTime = time;
+  }
+
+  if (pompka_ON == 0)
+    myservo.write((samples + 1) * 30);
+
+  // take sample
+  if (samples < 5 && fall_true == 1 && pompka_ON == 0)
+    takeSample(altitude);
+
+  if (pompka_ON == 1 && time - time_pompka_start >= 2000)
+    takenSample();
+
+  frame.clear();
+}
+
+void takeSample(float n) {
+  if (n < high[samples]) {
+    digitalWrite(pompka, HIGH);
+    altitude_sample_start = altitude;
+    samples++;
+    time_pompka_start = time;
+    pompka_ON = 1;
+  }
+  return;
+}
+
+void takenSample() {
+  digitalWrite(pompka, LOW);
+  myFile = SD.open("probki.txt", FILE_WRITE);
+  myFile.print("nr. ");
+  myFile.print(samples - 1);
+  myFile.print(" na wysokosci od ");
+  myFile.print(altitude_sample_start);
+  myFile.print("do ");
+  myFile.println(altitude);
+  myFile.close();
+  pompka_ON = 0;
+  return;
+}
+
+bool fall() {
+  int first = Mhigh, second = Mhigh, step = 3, hroz;
+  first = bmp.readAltitude(seaLevel);
+  delay(1000);
+  second = bmp.readAltitude(seaLevel);
+  if (first - second > step) {
+    hroz = (second - 320) / 5;
+    for (int i = 0; i < 5; i++)
+      high[i] = (second - ((i + 1) * hroz));
+    return true;
+  }
+  return false;
+}
