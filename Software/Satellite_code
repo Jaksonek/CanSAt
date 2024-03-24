@@ -1,12 +1,14 @@
 #include <cmath>
 #include <Wire.h>
-#include <Servo.h>
 #include <Adafruit_BMP280.h>
+#include <Servo.h>
 #include <CanSatKit.h>
-#include <SPI.h>
-#include <SD.h>
-
+#include <Adafruit_GPS.h>
+#include <SoftwareSerial.h>
 using namespace CanSatKit;
+
+
+
 
 Radio radio(Pins::Radio::ChipSelect,
             Pins::Radio::DIO0,
@@ -15,146 +17,195 @@ Radio radio(Pins::Radio::ChipSelect,
             SpreadingFactor_9,
             CodingRate_4_8);
 Frame frame;
-int counter = 0;
+int counter=0;
+//potentio
+const int potPin = A5; // Analog pin connected to the potentiometer
 
-// BMP
-#define BMP_SCK 3  // scl
-#define BMP_MOSI 4 // sda
-Adafruit_BMP280 bmp;
 
-// Selector wheel
+
+
+SoftwareSerial mySerial(3,2);
+Adafruit_GPS GPS(&myserial)
+
+
+//BMP
+// #define BMP_SCK  3//scl
+// #define BMP_MOSI 4//sda
+BMP280 bmp;
+
+
+//Temperature sesnsor
+//const int lm35_pin = A0;
+
+
+
+
+//Selector wheele
 #define pompka 8 // pompka
 Servo myservo;
 
-// SD card
-const int cs = 11;
-File myFile;
 
-// Variables
+/* SD card
+const int chipSelect = 11;
+File daneS;
+*/
+//Variables
 float max_altitude;
 double pressure;
 float altitude;
-float altitude_sample_start;
 double temperatureOut;
-unsigned long time;
-unsigned long lastTime = 0;
-unsigned long time_pompka_start;
-
-int servoposition = 0;
+unsigned long  time;
+unsigned long  lastTime = 0;
+int servoposition=0;
 int interval = 950; // time between sending data
-int high[5] = {1300, 1100, 900, 700, 500}; // altitudes to take sample
-int samples = 0;
-int Mhigh = 1e9 + 7;
-bool fall_true = 0;
-bool pompka_ON = 0;
-
-float seaLevel = 1016;
-
+   // altitudes to take sample
+   
+   int high [5]={800,600,500,400,200}; // nie używamy zerowego i jakie wysokosci??
+  int samples=0;
+int Mhigh = 1e9+7;
+bool fall_true=0;
 /*
 ------------------Setup----------------------
 */
 void setup() {
   Serial.begin(9600);
+  GPS.begin(9600);
+  GPS.sendCommand(PMTK_SET_NMEA_OUTPOUT_RMCONLY);
+  gPS.sendCommand(PMTK_SET_NMEA_UPDATE_1HZ)
 
-  if (!bmp.begin(0x76)) {
-    while (1);
-  }
 
-  if (!SD.begin(cs)) {
-    while (1);
-  }
-
-  radio.begin();
-  pinMode(pompka, OUTPUT);
-  myservo.attach(9);
-  delay(1000);
+if(!bmp.begin()) {
+    // if connection failed - print message to the user
+    Serial.println("BMP init failed!");
+   
+    while(1);
 }
+bmp.setOversampling(16);
 
+
+/*if (!SD.begin(chipSelect)) {
+    Serial.println("initialization failed!");
+    while (1);
+  }*/
+ radio.begin();
+//servo_9.attach(9);
+pinMode(pompka, OUTPUT);
+myservo.attach(9);
+
+
+
+
+
+
+delay(1000);
+}
 /*
 ------------------loop----------------------
 */
 void loop() {
-  if (fall_true == 0) {
-    if (fall() == true) {
-      fall_true = 1;
-    }
+ if (fall_true ==0)
+ {
+  if(fall()==true)
+  {
+    fall_true=1;
   }
+ 
+}
+time = millis();
+//read sensor data
+//int raw = analogRead(lm35_pin);
+bmp.measureTemperatureAndPressure(temperatureOut, pressure);
+altitude =  analogRead(potPin);
 
-  time = millis();
-  // read sensor data
-  temperatureOut = bmp.readTemperature();
-  pressure = bmp.readPressure();
-  altitude = bmp.readAltitude(seaLevel);
 
-  // send data
-  if (time - interval > lastTime) {
-    frame.print(counter);
-    counter++;
-    frame.print("Nebula temperature: ");
-    frame.print(temperatureOut, 2);
-    frame.print("C");
-    frame.print(" pressure: ");
-    frame.print(pressure, 2);
-    frame.print("hP");
-    frame.print("high");
-    frame.println(altitude);
 
-    radio.transmit(frame);
-    myFile = SD.open("dane.txt", FILE_WRITE);
-    myFile.print(frame);
-    myFile.close();
 
-    lastTime = time;
-  }
+//send data
 
-  if (pompka_ON == 0)
-    myservo.write((samples + 1) * 30);
 
-  // take sample
-  if (samples < 5 && fall_true == 1 && pompka_ON == 0)
-    takeSample(altitude);
+if(time-interval>lastTime)
+{
+ frame.print(counter);
+ 
+  counter++;
+frame.print("Nebula temperature: ");
 
-  if (pompka_ON == 1 && time - time_pompka_start >= 2000)
-    takenSample();
 
-  frame.clear();
+frame.print(temperatureOut,2);
+frame.print("C");
+frame.print(" pressure: "); //pascal
+frame.print(pressure,2);
+frame.print("hP"); //pascal
+frame.print("high"); //pascal
+frame.print(altitude); //pascal
+
+
+
+
+
+
+frame.print(GPS.lat); //N or S
+frame.print(GPS.latitude, 4);
+frame.print(GPS.lon); // W or E
+frame.print(GPS.longitude, 4);
+radio.transmit(frame);
+
+
+SerialUSB.print(frame);
+lastTime=time;
 }
 
-void takeSample(float n) {
-  if (n < high[samples]) {
-    digitalWrite(pompka, HIGH);
-    altitude_sample_start = altitude;
-    samples++;
-    time_pompka_start = time;
-    pompka_ON = 1;
-  }
-  return;
-}
 
-void takenSample() {
-  digitalWrite(pompka, LOW);
-  myFile = SD.open("probki.txt", FILE_WRITE);
-  myFile.print("nr. ");
-  myFile.print(samples - 1);
-  myFile.print(" na wysokosci od ");
-  myFile.print(altitude_sample_start);
-  myFile.print("do ");
-  myFile.println(altitude);
-  myFile.close();
-  pompka_ON = 0;
-  return;
-}
+myservo.write((samples+1)*30);
 
-bool fall() {
-  int first = Mhigh, second = Mhigh, step = 3, hroz;
-  first = bmp.readAltitude(seaLevel);
+
+
+
+//take sample
+if(samples<5 && fall_true==1)
+takeSample(altitude);
+clearGPS();
+ frame.clear();
+}//loop
+
+
+
+
+void takeSample(float n){
+ 
+  if(n<high[samples]){
+  digitalWrite(pompka,HIGH);
   delay(1000);
-  second = bmp.readAltitude(seaLevel);
-  if (first - second > step) {
-    hroz = (second - 320) / 5;
-    for (int i = 0; i < 5; i++)
-      high[i] = (second - ((i + 1) * hroz));
-    return true;
-  }
+  samples++;
+  digitalWrite(pompka,LOW);
+ 
+}
+return ;
+}
+
+
+bool fall(){
+  int first=Mhigh,second=Mhigh,step= 50;
+     first = analogRead(potPin);
+    delay(500);
+    second = analogRead(potPin);
+   if(first-second>step) {
+return true;
+   }
   return false;
+ 
+}
+
+
+
+
+
+
+
+
+///--------------------- Temperature senosr function------------
+float lm35_raw_to_temperature(int raw) {
+  float voltage = raw * 3.3 / (std::pow(2, 12));
+  float temperature = 100.0 * voltage;
+  return temperature;
 }
